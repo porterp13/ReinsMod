@@ -34,3 +34,6 @@ Desktop.ini
 !build.gradle
 !settings.gradle
 !gradle.properties
+!build/
+!.gradle/
+!.idea/

@@ -1,0 +1,8 @@
+Manifest-Version: 1.0
+Specification-Title: reinsmod
+Specification-Vendor: smeakmoseley
+Specification-Version: 1
+Implementation-Title: forge-1.20.1-47.3.11-mdk
+Implementation-Version: 0.190.0
+Implementation-Vendor: smeakmoseley
+
