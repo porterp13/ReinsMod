@@ -1,0 +1,40 @@
+# ForgeGradle files
+.gradle/
+build/
+out/
+forgegradle*
+*.gradle.kts
+*.log
+*.jar
+*.class
+
+# Eclipse / IntelliJ / VSCode
+.idea/
+*.iml
+*.iws
+.vscode/
+.classpath
+.project
+.settings/
+
+# macOS junk
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows junk
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Gradle wrapper (optional - keep if you want others to build easily)
+!gradlew
+!gradlew.bat
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
+
+# Keep source code & important files
+src/
+gradle.properties
+build.gradle
+settings.gradle
