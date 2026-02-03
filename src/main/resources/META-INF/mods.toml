@@ -1,0 +1,33 @@
+modLoader="javafml"
+loaderVersion="[47,)"
+license="All Rights Reserved"
+
+[[mods]]
+modId="reinsmod"
+version="0.190.0"
+displayName="Reins Mod"
+authors="smeakmoseley"
+description='''
+Adds reins and whips to control animals for wagons and Valkyrien Skies ships.
+'''
+
+[[dependencies.reinsmod]]
+modId="forge"
+mandatory=true
+versionRange="[47,)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.reinsmod]]
+modId="minecraft"
+mandatory=true
+versionRange="[1.20.1]"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.reinsmod]]
+modId="valkyrienskies"
+mandatory=true
+versionRange="[0,)"
+ordering="AFTER"
+side="BOTH"
