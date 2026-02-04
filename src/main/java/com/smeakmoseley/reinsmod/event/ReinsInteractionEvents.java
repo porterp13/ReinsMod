@@ -31,6 +31,28 @@ public class ReinsInteractionEvents {
         if (player.level().isClientSide) return;
 
         animal.getCapability(ReinedAnimalProvider.CAPABILITY).ifPresent(cap -> {
+
+            // 🔹 SHIFT + RIGHT CLICK = REMOVE REINS
+            if (player.isShiftKeyDown()) {
+
+                if (cap.hasReins()) {
+                    cap.setHasReins(false);
+                    cap.setOwner(null);
+
+                    // Clear ship leash state too
+                    cap.setLeashedToShip(false);
+                    cap.setShipFencePos(null);
+                    cap.setShipAnchorPos(null);
+
+                    player.sendSystemMessage(
+                            Component.literal("Reins removed from animal")
+                    );
+                }
+
+                return;
+            }
+
+            // 🔹 NORMAL RIGHT CLICK = ATTACH REINS
             cap.setHasReins(true);
             cap.setOwner(player.getUUID());
 
@@ -38,7 +60,7 @@ public class ReinsInteractionEvents {
                     Component.literal("Reins attached to animal")
             );
 
-            // 🔹 Detect ship leash immediately
+            // Detect ship leash immediately
             ShipLeashDetection.detectFenceOnShip(animal).ifPresent(info -> {
                 player.sendSystemMessage(
                         Component.literal("Animal leashed to a Valkyrien Skies ship")

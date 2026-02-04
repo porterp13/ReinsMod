@@ -84,10 +84,19 @@ public final class ShipLeashPhysicsTick {
                     }
 
                     Vec3 knotPos = knot.position();
+
+                    // 🔒 Anchor math should be horizontal-only
+                    Vec3 animalPosStable = new Vec3(
+                            animal.position().x,
+                            knotPos.y,
+                            animal.position().z
+                    );
+
                     Object ship0 = VsShipAccess.getShipManagingPos(level, knotPos).orElse(null);
+
                     if (ship0 == null) return;
 
-                    AnchorSolve solved = resolveAnchorWorld(level, ship0, knotPos, animal.position());
+                    AnchorSolve solved = resolveAnchorWorld(level, ship0, knotPos, animalPosStable);
                     if (!solved.ok || solved.anchorWorld == null) {
                         maybeWarnBadAnchor(player, animal.getUUID(), knotPos, cap.getShipAnchorPos());
                         return;
@@ -325,6 +334,7 @@ public final class ShipLeashPhysicsTick {
         if (best.anchorWorld == null) return new AnchorSolve(false, null, ship0, "no_candidate");
         if (!Double.isFinite(best.dist)) return new AnchorSolve(false, null, ship0, "nan_dist");
         if (best.dist > MAX_REASONABLE_DIST) {
+            VsShipTransforms.clearCacheFor(ship0.getClass());
             return new AnchorSolve(false, best.anchorWorld, best.shipObj, "all_bad:" + best.mode);
         }
 

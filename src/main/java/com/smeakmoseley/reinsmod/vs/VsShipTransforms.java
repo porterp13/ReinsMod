@@ -46,6 +46,10 @@ public final class VsShipTransforms {
         }
     }
 
+    public static void clearCacheFor(Class<?> shipClass) {
+        CACHE.remove(shipClass);
+    }
+
     private VsShipTransforms() {}
 
     /** Convert a shipyard-space position to world-space. Returns null if unresolved. */
@@ -297,6 +301,9 @@ public final class VsShipTransforms {
      */
     private static void decideDirectionIfNeeded(Resolved r, Object holder, Vec3 samplePos) {
         if (r.decided) return;
+        if (samplePos.lengthSqr() < 1.0) {
+            return; // too close to origin / meaningless sample
+        }
 
         synchronized (r) {
             if (r.decided) return;

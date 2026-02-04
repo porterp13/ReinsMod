@@ -7,14 +7,12 @@ import com.smeakmoseley.reinsmod.item.ModItems;
 import com.smeakmoseley.reinsmod.vs.ShipLeashDetection;
 import com.smeakmoseley.reinsmod.vs.ShipLeashInfo;
 import com.smeakmoseley.reinsmod.vs.ShipRopeConstraint;
-
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.MoverType;
 import net.minecraft.world.entity.animal.Animal;
 import net.minecraft.world.phys.Vec3;
-
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
@@ -27,7 +25,10 @@ public class ServerAnimalControlTick {
     private static final float WALK_SPEED = 0.35f;
     private static final float SPRINT_MULT = 1.65f;
 
-    private static final double JUMP_VEL = 0.52; // tuned for horses-ish feel
+    // ✅ 1 block step-up while controlled
+    private static final float CONTROL_STEP = 1.0f;
+
+    // (jump intentionally ignored for now)
 
     @SubscribeEvent
     public static void onServerTick(TickEvent.ServerTickEvent event) {
@@ -66,26 +67,28 @@ public class ServerAnimalControlTick {
                             }
                         }
 
-                        // While whip is held, we "puppet" the animal
+                        // While whip is held, we "puppet" the animal (your original contract)
                         animal.setNoAi(holdingWhip);
+
                         if (!holdingWhip || control == null) return;
+
+                        // ✅ Enable 1-block stepping while controlled
+                        animal.setMaxUpStep(CONTROL_STEP);
 
                         // (2) Body orientation follows CAMERA yaw
                         animal.setYRot(control.yaw);
                         animal.setYHeadRot(control.yaw);
                         try {
-                            // Mob has yBodyRot; Animal inherits it
                             animal.yBodyRot = control.yaw;
                         } catch (Throwable ignored) {}
 
                         // (3) Feed movement inputs so limb animation plays
                         try {
-                            animal.zza = control.forward; // forward/back
-                            animal.xxa = control.strafe;  // strafe
+                            animal.zza = control.forward;
+                            animal.xxa = control.strafe;
                         } catch (Throwable ignored) {}
 
                         float yawRad = (float) Math.toRadians(control.yaw);
-
                         Vec3 forward = new Vec3(
                                 -Math.sin(yawRad),
                                 0,
@@ -101,7 +104,8 @@ public class ServerAnimalControlTick {
 
                         float speed = WALK_SPEED * (control.sprint ? SPRINT_MULT : 1.0f);
 
-                        Vec3 move = forward.scale(control.forward)
+                        // Desired horizontal move (per tick)
+                        Vec3 moveXZ = forward.scale(control.forward)
                                 .add(right.scale(control.strafe))
                                 .scale(speed);
 
@@ -110,27 +114,24 @@ public class ServerAnimalControlTick {
                             Vec3 anchorShipyard = cap.getShipAnchorPos();
                             BlockPos fencePos = cap.getShipFencePos();
                             if (anchorShipyard != null && fencePos != null) {
-                                move = ShipRopeConstraint.applyRigid(
+                                moveXZ = ShipRopeConstraint.applyRigid(
                                         level,
                                         animal,
                                         fencePos,
                                         anchorShipyard,
-                                        move
+                                        moveXZ
                                 );
                             }
                         }
 
-                        // Apply motion
+                        // ✅ CRITICAL: preserve Y velocity (gravity/fall/collision)
+                        Vec3 currentDM = animal.getDeltaMovement();
+                        Vec3 move = new Vec3(moveXZ.x, currentDM.y, moveXZ.z);
+
+                        // Apply motion without deleting Y
                         animal.setDeltaMovement(move);
                         animal.move(MoverType.SELF, move);
                         animal.hurtMarked = true;
-
-                        // (5) Jump on space (only if on ground)
-                        if (control.jump && animal.onGround()) {
-                            Vec3 dm = animal.getDeltaMovement();
-                            animal.setDeltaMovement(dm.x, JUMP_VEL, dm.z);
-                            animal.hurtMarked = true;
-                        }
                     });
                 });
             }

@@ -9,7 +9,7 @@ plugins {
 /* ===================== MOD METADATA (EDIT HERE) ===================== */
 
 group = 'com.smeakmoseley'
-version = '0.190.0'
+version = '0.210.0'
 
 ext {
     mod_id = 'reinsmod'
