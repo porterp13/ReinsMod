@@ -6,13 +6,15 @@ import net.minecraft.server.level.ServerPlayer;
 public class AnimalControlLogic {
 
     public static void handleInput(ServerPlayer player, AnimalControlInputPacket msg) {
+        int tick = player.serverLevel().getServer().getTickCount();
         ServerControlState.update(
                 player.getUUID(),
                 msg.forward,
                 msg.strafe,
                 msg.yaw,
                 msg.sprint,
-                msg.jump
+                msg.jump,
+                tick
         );
     }
 }

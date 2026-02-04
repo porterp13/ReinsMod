@@ -1,12 +1,11 @@
 package com.smeakmoseley.reinsmod.event;
 
+import com.smeakmoseley.reinsmod.client.ClientSprintIntent;
 import com.smeakmoseley.reinsmod.item.ModItems;
 import com.smeakmoseley.reinsmod.network.AnimalControlInputPacket;
 import com.smeakmoseley.reinsmod.network.NetworkHandler;
-
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
-
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
@@ -23,23 +22,26 @@ public class ClientInputEvents {
         LocalPlayer player = mc.player;
         if (player == null) return;
 
-        if (!player.getMainHandItem().is(ModItems.WHIP.get())) return;
+        boolean holdingWhip = player.getMainHandItem().is(ModItems.WHIP.get());
+        if (!holdingWhip) {
+            ClientSprintIntent.reset();
+            return;
+        }
+
+        // Update sprint intent each tick (supports toggle sprint users)
+        ClientSprintIntent.tick();
 
         float forward = 0f;
         if (mc.options.keyUp.isDown()) forward += 1f;
         if (mc.options.keyDown.isDown()) forward -= 1f;
 
         float strafe = 0f;
-        // Vanilla: Left should be -1, Right should be +1
         if (mc.options.keyLeft.isDown())  strafe -= 1f;
         if (mc.options.keyRight.isDown()) strafe += 1f;
 
         float yaw = mc.gameRenderer.getMainCamera().getYRot();
 
-        // RIGHT SHIFT sprint (specifically)
-        boolean sprint = mc.options.keyShift.isDown();
-
-        // spacebar jump
+        boolean sprint = ClientSprintIntent.get();
         boolean jump = mc.options.keyJump.isDown();
 
         NetworkHandler.CHANNEL.sendToServer(
