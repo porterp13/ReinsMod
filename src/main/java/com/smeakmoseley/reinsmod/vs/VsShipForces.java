@@ -14,6 +14,9 @@ public final class VsShipForces {
 
     private static volatile String SUMMARY = "unresolved";
 
+    // Forces smaller than this are treated as "no-op"
+    private static final double FORCE_EPS_SQR = 1.0e-6;
+
     private VsShipForces() {}
 
     public static String resolutionSummary() {
@@ -23,12 +26,24 @@ public final class VsShipForces {
     /**
      * Applies a WORLD-space force to a VS ship using GameToPhysicsAdapter (GTPA).
      *
-     * @param shipObj   usually org.valkyrienskies.core.impl.game.ships.ShipData
+     * IMPORTANT:
+     *  - We DO NOT wake the ship unless a real force is applied.
+     *  - This is critical for Create compatibility: Create refuses interaction
+     *    with contraptions that are being actively simulated.
+     *
+     * @param shipObj    usually org.valkyrienskies.core.impl.game.ships.ShipData
      * @param forceWorld force in WORLD space
-     * @param worldPos   position in WORLD space where force is applied (pass null to apply at COM)
+     * @param worldPos   position in WORLD space where force is applied (null = COM)
      */
     public static boolean applyWorldForce(Object shipObj, Vec3 forceWorld, Vec3 worldPos) {
         if (shipObj == null || forceWorld == null) return false;
+
+        // 🚨 If the force is effectively zero, do NOTHING.
+        // Do not wake the ship, do not touch GTPA.
+        if (forceWorld.lengthSqr() <= FORCE_EPS_SQR) {
+            SUMMARY = "skipped_zero_force";
+            return false;
+        }
 
         try {
             // 1) shipId (ShipId is basically a long in VS)
@@ -41,7 +56,7 @@ public final class VsShipForces {
                 return false;
             }
 
-            // 3) Get ValkyrienSkiesMod.getOrCreateGTPA(dimKey)
+            // 3) ValkyrienSkiesMod.getOrCreateGTPA(dimKey)
             Class<?> vsm = Class.forName("org.valkyrienskies.mod.common.ValkyrienSkiesMod");
             Method getOrCreate = null;
             for (Method m : vsm.getMethods()) {
@@ -63,12 +78,14 @@ public final class VsShipForces {
                 return false;
             }
 
-            // 4) Wake ship: gtpa.setStatic(shipId, false) if available
+            // 4) Wake ship ONLY because we have a real force
             tryInvokeSetStatic(gtpa, shipId, false);
 
             // 5) Call gtpa.applyWorldForce(shipId, Vector3dc, Vector3dc?)
             Vector3d f = new Vector3d(forceWorld.x, forceWorld.y, forceWorld.z);
-            Vector3d p = (worldPos == null) ? null : new Vector3d(worldPos.x, worldPos.y, worldPos.z);
+            Vector3d p = (worldPos == null)
+                    ? null
+                    : new Vector3d(worldPos.x, worldPos.y, worldPos.z);
 
             Method applyWorldForce = findApplyWorldForce(gtpa.getClass());
             if (applyWorldForce == null) {
@@ -87,6 +104,10 @@ public final class VsShipForces {
         }
     }
 
+    // ------------------------------------------------------------
+    // Reflection helpers
+    // ------------------------------------------------------------
+
     private static Method findApplyWorldForce(Class<?> gtpaClass) {
         // Kotlin signature (compiled): applyWorldForce(long, Vector3dc, Vector3dc)
         for (Method m : gtpaClass.getMethods()) {
@@ -97,12 +118,10 @@ public final class VsShipForces {
             boolean firstOk = (p[0] == long.class) || (p[0] == Long.class);
             boolean vecOk =
                     p[1].getName().startsWith("org.joml.Vector3d")
-                            || p[1].getName().startsWith("org.joml.Vector3dc")
-                            || p[1].getName().equals("org.joml.Vector3dc");
+                            || p[1].getName().startsWith("org.joml.Vector3dc");
             boolean vec2Ok =
                     p[2].getName().startsWith("org.joml.Vector3d")
-                            || p[2].getName().startsWith("org.joml.Vector3dc")
-                            || p[2].getName().equals("org.joml.Vector3dc");
+                            || p[2].getName().startsWith("org.joml.Vector3dc");
 
             if (firstOk && vecOk && vec2Ok) {
                 m.setAccessible(true);
@@ -132,7 +151,6 @@ public final class VsShipForces {
     }
 
     private static long readLongProperty(Object obj, String fieldName, String getterName) throws Exception {
-        // try getter
         try {
             Method m = obj.getClass().getMethod(getterName);
             m.setAccessible(true);
@@ -140,7 +158,6 @@ public final class VsShipForces {
             if (v instanceof Number n) return n.longValue();
         } catch (NoSuchMethodException ignored) {}
 
-        // try field
         Field f = obj.getClass().getDeclaredField(fieldName);
         f.setAccessible(true);
         Object v = f.get(obj);
@@ -150,7 +167,6 @@ public final class VsShipForces {
     }
 
     private static String readStringProperty(Object obj, String fieldName, String getterName) throws Exception {
-        // try getter
         try {
             Method m = obj.getClass().getMethod(getterName);
             m.setAccessible(true);
@@ -158,7 +174,6 @@ public final class VsShipForces {
             if (v != null) return v.toString();
         } catch (NoSuchMethodException ignored) {}
 
-        // try field
         try {
             Field f = obj.getClass().getDeclaredField(fieldName);
             f.setAccessible(true);

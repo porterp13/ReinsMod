@@ -16,13 +16,25 @@ public final class ShipRopeConstraint {
     private ShipRopeConstraint() {}
 
     /**
-     * Rigid rein: clamp the animal's move so that after moving, horizontal distance to anchorWorld <= ROPE_LEN.
+     * Rigid rein: clamp the animal's move so that after moving,
+     * horizontal distance to anchorWorld <= ROPE_LEN.
      *
-     * @param fencePos       the fence block that owns the knot (selects correct knot)
-     * @param anchorShipyard cached anchor in SHIPYARD space (ship-managed space)
+     * IMPORTANT:
+     *  - In survival, LeashFenceKnotEntity.position() is often WORLD space.
+     *  - In some VS contexts, you may see shipyard-managed coordinates.
+     *  - So we try BOTH interpretations and pick the best.
+     *
+     * @param fencePos  the fence block that owns the knot (selects correct knot)
+     * @param anchorRaw cached anchor as stored (may be shipyard OR world)
      */
-    public static Vec3 applyRigid(ServerLevel level, Animal animal, BlockPos fencePos, Vec3 anchorShipyard, Vec3 desiredMove) {
-        if (level == null || animal == null || fencePos == null || anchorShipyard == null || desiredMove == null) return desiredMove;
+    public static Vec3 applyRigid(ServerLevel level,
+                                  Animal animal,
+                                  BlockPos fencePos,
+                                  Vec3 anchorRaw,
+                                  Vec3 desiredMove) {
+        if (level == null || animal == null || fencePos == null || anchorRaw == null || desiredMove == null) {
+            return desiredMove;
+        }
 
         // Find the knot for THIS fence pos (avoid “wrong knot” when multiple exist)
         LeashFenceKnotEntity knot = level.getEntitiesOfClass(
@@ -35,18 +47,19 @@ public final class ShipRopeConstraint {
 
         if (knot == null) return desiredMove;
 
-        // Resolve ship using the knot's position (ship-managed space)
-        Object ship0 = VsShipAccess.getShipManagingPos(level, knot.position()).orElse(null);
+        // We use the knot position to locate the ship (this is world position)
+        Vec3 knotWorldPos = knot.position();
+        Object ship0 = VsShipAccess.getShipManagingPos(level, knotWorldPos).orElse(null);
         if (ship0 == null) return desiredMove;
 
-        // Convert SHIPYARD anchor -> WORLD anchor
-        Vec3 anchorWorld = VsShipTransforms.shipyardToWorld(ship0, anchorShipyard);
+        // Pick a sane anchorWorld using best-candidate logic
+        Vec3 anchorWorld = chooseBestAnchorWorld(level, ship0, animal, anchorRaw);
         if (anchorWorld == null) return desiredMove;
 
         Vec3 pos0 = animal.position();
         Vec3 pos1 = pos0.add(desiredMove);
 
-        // Horizontal constraint
+        // Horizontal constraint only
         Vec3 d = pos1.subtract(anchorWorld);
         d = new Vec3(d.x, 0.0, d.z);
 
@@ -64,5 +77,56 @@ public final class ShipRopeConstraint {
         );
 
         return clampedPos1.subtract(pos0);
+    }
+
+    /**
+     * Try interpreting anchorRaw as:
+     *  A) shipyard-managed (transform to world)
+     *  B) already world
+     *
+     * Choose the candidate with smallest horizontal distance to the animal
+     * that is also "reasonable".
+     */
+    private static Vec3 chooseBestAnchorWorld(ServerLevel level, Object fallbackShip, Animal animal, Vec3 anchorRaw) {
+        Vec3 animalPos = animal.position();
+
+        // Candidate A: treat as shipyard -> world
+        Vec3 a = VsShipTransforms.shipyardToWorld(fallbackShip, anchorRaw);
+
+        // Candidate B: treat as already world
+        Vec3 b = anchorRaw;
+
+        Vec3 best = null;
+        double bestDist = Double.POSITIVE_INFINITY;
+
+        bestDist = considerCandidate(level, fallbackShip, animalPos, a, bestDist);
+        if (bestDist != Double.POSITIVE_INFINITY) best = a;
+
+        double bd = considerCandidate(level, fallbackShip, animalPos, b, bestDist);
+        if (bd < bestDist) {
+            bestDist = bd;
+            best = b;
+        }
+
+        if (best == null) return null;
+        if (!Double.isFinite(bestDist)) return null;
+        if (bestDist > MAX_REASONABLE_DIST) return null;
+
+        return best;
+    }
+
+    private static double considerCandidate(ServerLevel level, Object fallbackShip, Vec3 animalPos, Vec3 anchorWorld, double currentBest) {
+        if (anchorWorld == null) return currentBest;
+
+        // Ensure the anchorWorld is actually on/near a ship-managed region; if not, still allow fallbackShip
+        Object shipHere = VsShipAccess.getShipManagingPos(level, anchorWorld).orElse(fallbackShip);
+        if (shipHere == null) return currentBest;
+
+        Vec3 d = animalPos.subtract(anchorWorld);
+        d = new Vec3(d.x, 0.0, d.z);
+        double dist = d.length();
+        if (!Double.isFinite(dist)) return currentBest;
+
+        return Math.min(currentBest, dist);
     }
 }

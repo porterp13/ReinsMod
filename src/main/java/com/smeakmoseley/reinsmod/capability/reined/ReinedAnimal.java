@@ -14,6 +14,7 @@ public class ReinedAnimal implements IReinedAnimal {
     private boolean leashedToShip = false;
     private BlockPos shipFencePos = null;
     private Vec3 shipAnchorPos = null;
+    private int shipLeashGraceTicks = 0;
 
     @Override
     public boolean hasReins() {
