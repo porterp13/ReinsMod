@@ -22,6 +22,8 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
+import com.smeakmoseley.reinsmod.control.ServerControlState;
+
 @Mod.EventBusSubscriber(
         modid = ReinsMod.MODID,
         bus = Mod.EventBusSubscriber.Bus.FORGE
@@ -121,7 +123,9 @@ public final class ShipLeashPhysicsTick {
                         return;
                     }
 
-                    boolean playerControlled = animal.isNoAi();
+                    UUID owner = cap.getOwner();
+                    boolean playerControlled = (owner != null && ServerControlState.get(owner) != null);
+
                     double slack = playerControlled ? PLAYER_SLACK : SLACK;
                     double stretch = dist - slack;
 
