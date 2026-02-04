@@ -30,16 +30,6 @@ public class WhipItem extends Item {
             // Only react if state actually changes
             if (cap.isControlling() != selected) {
                 cap.setControlling(selected);
-
-                if (selected) {
-                    player.sendSystemMessage(
-                            Component.literal("Whip control: ON")
-                    );
-                } else {
-                    player.sendSystemMessage(
-                            Component.literal("Whip control: OFF")
-                    );
-                }
             }
         });
     }

@@ -23,8 +23,8 @@ import java.util.Optional;
 @Mod.EventBusSubscriber(modid = ReinsMod.MODID, bus = Mod.EventBusSubscriber.Bus.FORGE)
 public class ServerAnimalControlTick {
 
-    private static final float WALK_SPEED = 0.10f;
-    private static final float SPRINT_MULT = 1.65f;
+    private static final float WALK_SPEED = 0.16f;
+    private static final float SPRINT_MULT = 1.80f;
 
     // ✅ allow 1-block step-up while controlled
     private static final float CONTROL_STEP = 1.0f;

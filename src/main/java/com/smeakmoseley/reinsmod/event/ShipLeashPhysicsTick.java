@@ -70,8 +70,8 @@ public final class ShipLeashPhysicsTick {
     private static final double MAX_REASONABLE_DIST = 128.0;
 
     // --- commanded speed constants (match ServerAnimalControlTick) ---
-    private static final double CMD_WALK_SPEED = 0.10;
-    private static final double CMD_SPRINT_MULT = 1.65;
+    private static final double CMD_WALK_SPEED = 0.16;
+    private static final double CMD_SPRINT_MULT = 1.80;
 
     // "no input" threshold (stick noise guard)
     private static final double INPUT_MAG_EPS = 0.05;

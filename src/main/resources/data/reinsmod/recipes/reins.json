@@ -1,0 +1,13 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "category": "tools",
+  "ingredients": [
+    { "item": "minecraft:string" },
+    { "item": "minecraft:lead" },
+    { "item": "minecraft:iron_ingot" }
+  ],
+  "result": {
+    "item": "reinsmod:reins",
+    "count": 1
+  }
+}
