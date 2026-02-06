@@ -29,7 +29,7 @@ import java.util.concurrent.ConcurrentHashMap;
 )
 public final class ShipLeashPhysicsTick {
 
-    private static final double SCAN_RADIUS = 64.0;
+    private static final double SCAN_RADIUS = 16.0;
 
     // Rope geometry
     private static final double SLACK = 2.5;
@@ -70,7 +70,7 @@ public final class ShipLeashPhysicsTick {
     private static final double MAX_REASONABLE_DIST = 128.0;
 
     // --- commanded speed constants (match ServerAnimalControlTick) ---
-    private static final double CMD_WALK_SPEED = 0.16;
+    private static final double CMD_WALK_SPEED = 0.20;
     private static final double CMD_SPRINT_MULT = 1.80;
 
     // "no input" threshold (stick noise guard)
@@ -82,6 +82,8 @@ public final class ShipLeashPhysicsTick {
     private static final ConcurrentHashMap<UUID, Double> LAST_PULL_FORCE = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<UUID, Integer> LAST_BAD_ANCHOR_TICK = new ConcurrentHashMap<>();
 
+    private static final boolean DEBUG = false;
+
     private ShipLeashPhysicsTick() {}
 
     @SubscribeEvent
@@ -89,11 +91,16 @@ public final class ShipLeashPhysicsTick {
         if (event.phase != TickEvent.Phase.END) return;
         if (!(event.level instanceof ServerLevel level)) return;
 
+        // 🔹 Performance: run at 10 Hz instead of 20 Hz (remove this line if undesired)
+        if ((level.getServer().getTickCount() & 1) != 0) return;
+
         int nowTick = level.getServer().getTickCount();
 
         Set<Integer> seen = new HashSet<>();
+
         for (ServerPlayer player : level.players()) {
             AABB scan = player.getBoundingBox().inflate(SCAN_RADIUS);
+
             for (Animal animal : level.getEntitiesOfClass(Animal.class, scan)) {
                 if (!seen.add(animal.getId())) continue;
 
@@ -109,7 +116,6 @@ public final class ShipLeashPhysicsTick {
 
                     Vec3 knotPos = knot.position();
 
-                    // Anchor math should be horizontal-only for distance checks
                     Vec3 animalPosStable = new Vec3(
                             animal.position().x,
                             knotPos.y,
@@ -128,239 +134,151 @@ public final class ShipLeashPhysicsTick {
                     Vec3 anchorWorld = solved.anchorWorld;
                     Object ship = solved.shipObj;
 
-                    // Horizontal delta from anchor to animal
                     Vec3 delta = animal.position().subtract(anchorWorld);
                     delta = new Vec3(delta.x, 0.0, delta.z);
                     double dist = delta.length();
-
                     if (dist < 1.0e-6) return;
-                    if (dist > MAX_REASONABLE_DIST) {
-                        debug(player,
-                                "§4DIST TOO LARGE dist=" + fmt(dist)
-                                        + " animal=" + fmt(animal.position())
-                                        + " anchorWorld=" + fmt(anchorWorld)
-                                        + " knot=" + fmt(knotPos)
-                                        + " mode=" + solved.mode
-                        );
-                        return;
-                    }
 
                     Vec3 dir = delta.scale(1.0 / dist);
 
-                    // Stable "player controlled" detection
                     UUID owner = cap.getOwner();
-                    ServerControlState.Control ctl = (owner == null) ? null
+                    ServerControlState.Control ctl = (owner == null)
+                            ? null
                             : ServerControlState.getRecent(owner, nowTick, 5);
+
                     boolean playerControlled = (ctl != null);
 
-                    // Commanded speed (blocks/tick)
                     double commandedSpeed = 0.0;
                     double inputMag = 0.0;
+
                     if (playerControlled) {
-                        inputMag = Math.sqrt((double) ctl.forward * ctl.forward + (double) ctl.strafe * ctl.strafe);
+                        inputMag = Math.sqrt(
+                                (double) ctl.forward * ctl.forward +
+                                (double) ctl.strafe * ctl.strafe
+                        );
                         if (inputMag > 1.0) inputMag = 1.0;
 
                         double mult = ctl.sprint ? CMD_SPRINT_MULT : 1.0;
                         commandedSpeed = CMD_WALK_SPEED * mult * inputMag;
                     }
+
                     boolean hasInput = playerControlled && inputMag > INPUT_MAG_EPS;
 
-                    // Rope slack and stretch
                     double slack = playerControlled ? PLAYER_SLACK : SLACK;
                     double stretch = dist - slack;
 
-                    // True velocities (blocks/tick)
                     Vec3 animalVel = animal.getDeltaMovement();
                     double animalSpeedAlong = animalVel.dot(dir);
 
-                    // VS velocity likely blocks/sec -> convert to blocks/tick
                     Vec3 shipVelWorldPerSec = getShipVelocity(ship);
                     double shipSpeedAlong = shipVelWorldPerSec.dot(dir) * SEC_PER_TICK;
 
                     double shipMass = VsShipMass.getShipMass(ship);
                     if (shipMass <= 0) shipMass = 20_000.0;
 
-                    // ============================================================
-                    // STOP INTENT: player is controlling but released movement input
-                    // Hard-reins behavior: drive ship horizontal velocity toward ZERO.
-                    // ============================================================
-                    boolean stopIntent = playerControlled && !hasInput;
-                    if (stopIntent) {
+                    // =========================
+                    // STOP INTENT (hard brake)
+                    // =========================
+                    if (playerControlled && !hasInput) {
                         UUID key = animal.getUUID();
 
-                        // ship velocity in blocks/sec (VS)
-                        Vec3 vSec = getShipVelocity(ship);
-
-                        // only horizontal braking (don't fight buoyancy / vertical physics)
-                        Vec3 vXZ = new Vec3(vSec.x, 0.0, vSec.z);
+                        Vec3 vXZ = new Vec3(shipVelWorldPerSec.x, 0.0, shipVelWorldPerSec.z);
                         double speed = vXZ.length();
 
-                        // ignore tiny jitter
                         if (speed > 0.02) {
-                            // "velocity damper" gain: accel ≈ STOP_VEL_GAIN * speed  (blocks/sec^2)
-                            // Force = mass * accel
-                            final double STOP_VEL_GAIN = 6.0;          // tune 3..12
-                            final double STOP_MAX_FORCE = 2_500_000.0; // tune up if needed
+                            final double STOP_VEL_GAIN = 6.0;
+                            final double STOP_MAX_FORCE_LOCAL = 2_500_000.0;
 
-                            Vec3 dirBrake = vXZ.scale(1.0 / speed); // unit direction of motion
+                            Vec3 dirBrake = vXZ.scale(1.0 / speed);
                             double brakeMag = shipMass * speed * STOP_VEL_GAIN;
-                            brakeMag = Math.min(brakeMag, STOP_MAX_FORCE);
+                            brakeMag = Math.min(brakeMag, STOP_MAX_FORCE_LOCAL);
 
-                            // Apply opposite to velocity at COM
                             VsShipForces.applyWorldForce(ship, dirBrake.scale(-brakeMag), null);
                         }
 
-                        // don't let pull smoothing fight this
                         LAST_PULL_FORCE.put(key, 0.0);
-
-                        if (animal.tickCount % 20 == 0) {
-                            debug(player, "STOP-HALT speed=" + fmt(speed) + " (blocks/sec) mode=" + solved.mode);
-                        }
-
-                        return; // skip normal controller
+                        return;
                     }
 
-                    // Allowed forward speed along reins (blocks/tick)
                     double allowedAlong;
                     if (playerControlled) {
-                        // Use commanded speed as primary intent; animalSpeedAlong is noisy but useful as floor
                         allowedAlong = Math.max(commandedSpeed, Math.max(0.0, animalSpeedAlong));
                     } else {
                         allowedAlong = Math.max(0.0, animalSpeedAlong);
                     }
                     allowedAlong += VELOCITY_EPS;
 
-                    // 3-state controller with hysteresis
                     double hi = allowedAlong + SPEED_HYST;
                     double lo = Math.max(0.0, allowedAlong - SPEED_HYST);
 
                     UUID key = animal.getUUID();
 
-                    // ============================================================
-                    // BRAKE: ship outruns allowed+H (exclusive; no pull this tick)
-                    // ============================================================
+                    // =========================
+                    // BRAKE
+                    // =========================
                     if (shipSpeedAlong > hi) {
                         double excess = shipSpeedAlong - allowedAlong;
+                        double brakeMag = Math.min(excess * shipMass * BRAKE_GAIN, MAX_FORCE);
 
-                        double brakeMag = excess * shipMass * BRAKE_GAIN;
-                        brakeMag = Math.min(brakeMag, MAX_FORCE);
-
-                        // Brake opposite along-rein motion, AT COM (null)
                         VsShipForces.applyWorldForce(ship, dir.scale(-brakeMag), null);
-
-                        // Do not let pull smoothing fight this tick
                         LAST_PULL_FORCE.put(key, 0.0);
-
-                        if (animal.tickCount % 20 == 0) {
-                            debug(player,
-                                    "BRAKE shipAlong=" + fmt(shipSpeedAlong)
-                                            + " allowed=" + fmt(allowedAlong)
-                                            + " band=[" + fmt(lo) + "," + fmt(hi) + "]"
-                                            + " brake=" + fmt(brakeMag)
-                                            + " cmd=" + fmt(commandedSpeed)
-                                            + " animalAlong=" + fmt(animalSpeedAlong)
-                                            + " mode=" + solved.mode
-                            );
-                        }
                         return;
                     }
 
-                    // ============================================================
-                    // HOLD: within band (exclusive; no pull, no brake)
-                    // ============================================================
+                    // =========================
+                    // HOLD
+                    // =========================
                     if (shipSpeedAlong >= lo) {
                         LAST_PULL_FORCE.put(key, 0.0);
-
-                        if (animal.tickCount % 20 == 0) {
-                            debug(player,
-                                    "HOLD shipAlong=" + fmt(shipSpeedAlong)
-                                            + " allowed=" + fmt(allowedAlong)
-                                            + " band=[" + fmt(lo) + "," + fmt(hi) + "]"
-                                            + " cmd=" + fmt(commandedSpeed)
-                                            + " animalAlong=" + fmt(animalSpeedAlong)
-                                            + " mode=" + solved.mode
-                            );
-                        }
                         return;
                     }
 
-                    // ============================================================
-                    // PULL: clearly under-speed (exclusive; no brake)
-                    // ============================================================
+                    // =========================
+                    // PULL
+                    // =========================
                     double minForce = Math.max(1.0, shipMass * MIN_FORCE_MASS_MULT);
                     double targetForce = 0.0;
-                    double intentForce = 0.0;
 
-                    if (playerControlled) {
-                        if (hasInput) {
-                            double intent = Math.max(0.0, commandedSpeed);
+                    if (playerControlled && hasInput) {
+                        double intent = Math.max(0.0, commandedSpeed);
 
-                            // Breakaway bias (helps heavy ships start moving)
-                            if (intent < 0.08 && shipSpeedAlong < 0.15) {
-                                intent = Math.max(intent, 0.12);
-                            }
-
-                            if (intent > 0.01) {
-                                double shipTons = shipMass / 1000.0;
-                                double intentBase = intent * BASE_INTENT_FORCE_PER_TON;
-                                double massFactor = Math.pow(shipTons, INTENT_FORCE_MASS_EXPONENT);
-
-                                intentForce = intentBase * massFactor;
-                                intentForce = Math.min(MAX_INTENT_FORCE, Math.max(MIN_INTENT_FORCE, intentForce));
-
-                                double stretchForce = Math.max(0.0, stretch) * SPRING * 6.0;
-                                targetForce = Math.max(intentForce + stretchForce, minForce);
-                            }
-                        } else {
-                            // No input: only spring stretch (keeps it from "self driving")
-                            if (stretch > 0.0) {
-                                double relVel = animalVel.dot(dir);
-                                targetForce = Math.max((stretch * SPRING) + (relVel * DAMPING), 0.0);
-                            }
+                        if (intent < 0.08 && shipSpeedAlong < 0.15) {
+                            intent = Math.max(intent, 0.12);
                         }
-                    } else {
-                        // Passive mode: spring only
-                        if (stretch > 0.0) {
-                            double relVel = animalVel.dot(dir);
-                            targetForce = Math.max((stretch * SPRING) + (relVel * DAMPING), 0.0);
+
+                        if (intent > 0.01) {
+                            double shipTons = shipMass / 1000.0;
+                            double intentBase = intent * BASE_INTENT_FORCE_PER_TON;
+                            double massFactor = Math.pow(shipTons, INTENT_FORCE_MASS_EXPONENT);
+
+                            double intentForce = Math.min(
+                                    MAX_INTENT_FORCE,
+                                    Math.max(MIN_INTENT_FORCE, intentBase * massFactor)
+                            );
+
+                            double stretchForce = Math.max(0.0, stretch) * SPRING * 6.0;
+                            targetForce = Math.max(intentForce + stretchForce, minForce);
                         }
+                    } else if (stretch > 0.0) {
+                        double relVel = animalVel.dot(dir);
+                        targetForce = Math.max((stretch * SPRING) + (relVel * DAMPING), 0.0);
                     }
 
-                    // Smooth + rate limit pull force
                     double prev = LAST_PULL_FORCE.getOrDefault(key, targetForce);
                     double smoothed = prev + (targetForce - prev) * FORCE_SMOOTHING;
 
-                    double rateLimit = shipMass < 80_000 ? FORCE_RATE_LIMIT_MULT_LIGHT : FORCE_RATE_LIMIT_MULT_HEAVY;
+                    double rateLimit = shipMass < 80_000
+                            ? FORCE_RATE_LIMIT_MULT_LIGHT
+                            : FORCE_RATE_LIMIT_MULT_HEAVY;
+
                     double maxDelta = shipMass * rateLimit;
+                    double df = Math.max(-maxDelta, Math.min(maxDelta, smoothed - prev));
 
-                    double df = smoothed - prev;
-                    if (df > maxDelta) df = maxDelta;
-                    if (df < -maxDelta) df = -maxDelta;
-
-                    double forceMag = prev + df;
-                    forceMag = Math.min(MAX_FORCE, Math.max(0.0, forceMag));
-
+                    double forceMag = Math.min(MAX_FORCE, Math.max(0.0, prev + df));
                     LAST_PULL_FORCE.put(key, forceMag);
 
                     if (forceMag > 0.0) {
-                        // Pull ONLY along rein dir, applied at anchor point
                         VsShipForces.applyWorldForce(ship, dir.scale(forceMag), anchorWorld);
-                    }
-
-                    if (animal.tickCount % 20 == 0) {
-                        double shipTons = shipMass / 1000.0;
-                        debug(player,
-                                "PULL dist=" + fmt(dist)
-                                        + " stretch=" + fmt(stretch)
-                                        + " F=" + fmt(forceMag)
-                                        + " shipAlong=" + fmt(shipSpeedAlong)
-                                        + " allowed=" + fmt(allowedAlong)
-                                        + " cmd=" + fmt(commandedSpeed)
-                                        + " animalAlong=" + fmt(animalSpeedAlong)
-                                        + " mass=" + String.format("%.0ft", shipTons)
-                                        + " intentF≈" + String.format("%.0f kN", intentForce / 1000)
-                                        + " mode=" + solved.mode
-                        );
                     }
                 });
             }
@@ -433,9 +351,6 @@ public final class ShipLeashPhysicsTick {
         if (now - last < 40) return;
 
         LAST_BAD_ANCHOR_TICK.put(animalId, now);
-        p.sendSystemMessage(Component.literal(
-                "§7[ReinsDbg] §cAnchor solve failed. knot=" + fmt(knotPos) + " cap=" + fmt(capAnchor)
-        ));
     }
 
     // Use true VS ship velocity (assumed world space, units likely blocks/sec). If unavailable, returns ZERO (safe).
