@@ -1,0 +1,39 @@
+# === Forge / Gradle ===
+.gradle/
+build/
+out/
+forgegradle*
+*.gradle.kts
+run/
+logs/
+*.log
+*.jar  # except your final mod jar if you want to keep it
+*.class
+
+# === IDEs ===
+.idea/
+*.iml
+*.iws
+.vscode/
+.classpath
+.project
+.settings/
+
+# === OS junk ===
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# === Keep source code and important files ===
+!src/
+!gradle/
+!gradlew
+!gradlew.bat
+!gradle/wrapper/
+!build.gradle
+!settings.gradle
+!gradle.properties
+!build/
+!.gradle/
+!.idea/
