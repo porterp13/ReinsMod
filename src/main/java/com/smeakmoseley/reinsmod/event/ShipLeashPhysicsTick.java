@@ -4,10 +4,7 @@ import com.mojang.logging.LogUtils;
 import com.smeakmoseley.reinsmod.ReinsMod;
 import com.smeakmoseley.reinsmod.capability.reined.ReinedAnimalProvider;
 import com.smeakmoseley.reinsmod.control.ServerControlState;
-import com.smeakmoseley.reinsmod.vs.VsShipAccess;
 import com.smeakmoseley.reinsmod.vs.VsShipForces;
-import com.smeakmoseley.reinsmod.vs.VsShipMass;
-import com.smeakmoseley.reinsmod.vs.VsShipTransforms;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -19,11 +16,16 @@ import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 import org.slf4j.Logger;
+import org.valkyrienskies.core.api.ships.ServerShip;
+import org.valkyrienskies.core.api.ships.Ship;
+import org.valkyrienskies.mod.common.VSGameUtilsKt;
+import org.valkyrienskies.mod.common.util.VectorConversionsMCKt;
 
 import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Mod.EventBusSubscriber(
         modid = ReinsMod.MODID,
@@ -49,7 +51,7 @@ public final class ShipLeashPhysicsTick {
 
     // Smooth + rate limit (pull force only)
     private static final double FORCE_SMOOTHING = 0.75;
-    private static final double MIN_FORCE_MASS_MULT = 2.0;
+    private static final double MIN_FORCE_MASS_MULT = 1.0;
     private static final double FORCE_RATE_LIMIT_MULT_LIGHT = 400.0;
     private static final double FORCE_RATE_LIMIT_MULT_HEAVY = 220.0;
 
@@ -115,7 +117,13 @@ public final class ShipLeashPhysicsTick {
         for (ServerPlayer player : level.players()) {
             AABB scan = player.getBoundingBox().inflate(SCAN_RADIUS);
 
+            AtomicBoolean skip = new AtomicBoolean(false);
             for (Animal animal : level.getEntitiesOfClass(Animal.class, scan)) {
+
+                // I don't know if this works or not but might aswell try
+                if (skip.get()) break;
+
+
                 if (!seen.add(animal.getId())) continue;
 
                 animal.getCapability(ReinedAnimalProvider.CAPABILITY).ifPresent(cap -> {
@@ -137,9 +145,9 @@ public final class ShipLeashPhysicsTick {
 
                     // Try ship lookup at knot position, then at the fence block center as fallback
                     Vec3 fenceCenterWorld = Vec3.atCenterOf(knot.blockPosition());
-                    Object ship0 = VsShipAccess.getShipManagingPos(level, knotPos).orElse(null);
+                    Ship ship0 = VSGameUtilsKt.getShipManagingPos(level, knotPos);
                     if (ship0 == null) {
-                        ship0 = VsShipAccess.getShipManagingPos(level, fenceCenterWorld).orElse(null);
+                        ship0 = VSGameUtilsKt.getShipManagingPos(level, fenceCenterWorld);
                     }
                     if (ship0 == null) return;
 
@@ -157,13 +165,15 @@ public final class ShipLeashPhysicsTick {
                         return;
                     }
 
-                    Object ship = solved.shipObj;
+                    Ship ship = solved.shipObj;
+                    if (ship == null) return;
+
                     Vec3 anchorWorld = solved.anchorWorld;
 
                     Vec3 delta = animal.position().subtract(anchorWorld);
                     delta = new Vec3(delta.x, 0.0, delta.z);
                     double dist = delta.length();
-                    if (dist < 1.0e-6 || dist > MAX_REASONABLE_DIST) return;
+                    if (dist < 3 || dist > MAX_REASONABLE_DIST) return;
 
                     Vec3 dir = delta.scale(1.0 / dist);
 
@@ -198,10 +208,14 @@ public final class ShipLeashPhysicsTick {
                     Vec3 animalVel = animal.getDeltaMovement();
                     double animalSpeedAlong = animalVel.dot(dir);
 
-                    Vec3 shipVelWorldPerSec = getShipVelocity(ship);
+                    Vec3 shipVelWorldPerSec = VectorConversionsMCKt.toMinecraft(ship.getVelocity());
                     double shipSpeedAlong = shipVelWorldPerSec.dot(dir) * SEC_PER_TICK;
 
-                    double shipMass = VsShipMass.getShipMass(ship);
+                    double shipMass = 0;
+                    if (ship instanceof ServerShip serverShip) {
+                        shipMass = serverShip.getInertiaData().getMass();
+                    }
+
                     if (shipMass <= 0) shipMass = 20_000.0;
 
                     boolean cruiseEnabled = (ctl != null && ctl.cruiseEnabled);
@@ -292,7 +306,7 @@ public final class ShipLeashPhysicsTick {
                     double minForce = Math.max(1.0, shipMass * MIN_FORCE_MASS_MULT);
                     double targetForce = 0.0;
 
-                    if (playerControlled && (hasInput || ctl.cruiseEnabled)) {
+                    if (hasInput || ctl.cruiseEnabled) {
                         double shipTons = shipMass / 1000.0;
                         double intentBase = commandedSpeed * BASE_INTENT_FORCE_PER_TON;
                         double massFactor = Math.pow(shipTons, INTENT_FORCE_MASS_EXPONENT);
@@ -317,7 +331,7 @@ public final class ShipLeashPhysicsTick {
                     double maxDelta = shipMass * rateLimit;
                     double df = Math.max(-maxDelta, Math.min(maxDelta, smoothed - prevForce));
 
-                    double forceMag = Math.min(MAX_FORCE, Math.max(0.0, prevForce + df));
+                    double forceMag = Math.min(MAX_FORCE, Math.max(0.0, (prevForce + df)-1));
                     LAST_PULL_FORCE.put(key, forceMag);
 
                     if (forceMag > 0.0) {
@@ -328,6 +342,7 @@ public final class ShipLeashPhysicsTick {
                                     ok, VsShipForces.resolutionSummary(), forceMag, solved.mode, dist);
                         }
                     }
+                    skip.set(true);
                 });
             }
         }
@@ -340,10 +355,10 @@ public final class ShipLeashPhysicsTick {
     private static final class AnchorSolve {
         final boolean ok;
         final Vec3 anchorWorld;
-        final Object shipObj;
+        final Ship shipObj;
         final String mode;
 
-        AnchorSolve(boolean ok, Vec3 anchorWorld, Object shipObj, String mode) {
+        AnchorSolve(boolean ok, Vec3 anchorWorld, Ship shipObj, String mode) {
             this.ok = ok;
             this.anchorWorld = anchorWorld;
             this.shipObj = shipObj;
@@ -353,7 +368,7 @@ public final class ShipLeashPhysicsTick {
 
     private static final class BestAnchor {
         Vec3 anchorWorld = null;
-        Object shipObj = null;
+        Ship shipObj = null;
         String mode = "none";
         double dist = Double.POSITIVE_INFINITY;
     }
@@ -376,7 +391,7 @@ public final class ShipLeashPhysicsTick {
      */
     private static AnchorSolve resolveAnchorWorld(
             ServerLevel level,
-            Object ship0,
+            Ship ship0,
             Vec3 knotPos,
             Vec3 fenceCenterWorld,
             Vec3 capAnchorWorld,
@@ -392,14 +407,14 @@ public final class ShipLeashPhysicsTick {
         // (2) Try shipyard->world transform (works when knot/fence are in shipyard space)
         try {
             if (knotPos != null) {
-                Vec3 a = VsShipTransforms.shipyardToWorld(ship0, knotPos);
+                Vec3 a = VectorConversionsMCKt.toMinecraft(ship0.getShipToWorld().transformPosition(VectorConversionsMCKt.toJOML(knotPos)));
                 considerAnchor(level, ship0, animalWorldPos, a, "knot_shipyard_to_world", best);
             }
         } catch (Throwable ignored) {}
 
         try {
             if (fenceCenterWorld != null) {
-                Vec3 a = VsShipTransforms.shipyardToWorld(ship0, fenceCenterWorld);
+                Vec3 a = VectorConversionsMCKt.toMinecraft(ship0.getShipToWorld().transformPosition(VectorConversionsMCKt.toJOML(fenceCenterWorld)));
                 considerAnchor(level, ship0, animalWorldPos, a, "fence_shipyard_to_world", best);
             }
         } catch (Throwable ignored) {}
@@ -416,19 +431,20 @@ public final class ShipLeashPhysicsTick {
         if (!Double.isFinite(best.dist)) return new AnchorSolve(false, null, ship0, "nan_dist");
 
         if (best.dist > MAX_REASONABLE_DIST) {
-            // If everything is bad, clear transform cache to force re-resolve next time
-            VsShipTransforms.clearCacheFor(ship0.getClass());
             return new AnchorSolve(false, best.anchorWorld, best.shipObj, "all_bad:" + best.mode);
         }
 
         return new AnchorSolve(true, best.anchorWorld, best.shipObj, best.mode);
     }
 
-    private static void considerAnchor(ServerLevel level, Object fallbackShip, Vec3 animalWorldPos,
+    private static void considerAnchor(ServerLevel level, Ship fallbackShip, Vec3 animalWorldPos,
                                        Vec3 anchorWorld, String mode, BestAnchor best) {
         if (anchorWorld == null) return;
 
-        Object shipHere = VsShipAccess.getShipManagingPos(level, anchorWorld).orElse(fallbackShip);
+        Ship shipHere = VSGameUtilsKt.getShipManagingPos(level, anchorWorld);
+        if (shipHere == null) {
+            shipHere = fallbackShip;
+        }
 
         Vec3 d = animalWorldPos.subtract(anchorWorld);
         d = new Vec3(d.x, 0.0, d.z);
@@ -454,18 +470,6 @@ public final class ShipLeashPhysicsTick {
             LOGGER.warn("[ReinsMod] bad_anchor animal={} knotPos={} capAnchor={} fenceCenter={} reason={}",
                     animalId, fmt(knotPos), fmt(capAnchor), fmt(fenceCenter), reason);
         }
-    }
-
-    // Use true VS ship velocity (assumed world space, units likely blocks/sec). If unavailable, returns ZERO (safe).
-    private static Vec3 getShipVelocity(Object ship) {
-        try {
-            var m = ship.getClass().getMethod("getVelocity");
-            Object v = m.invoke(ship);
-            if (v instanceof org.joml.Vector3dc j) {
-                return new Vec3(j.x(), j.y(), j.z());
-            }
-        } catch (Throwable ignored) {}
-        return Vec3.ZERO;
     }
 
     @SuppressWarnings("unused")
